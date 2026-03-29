@@ -18,7 +18,9 @@ The concepts of agent orchestration, sub-agent delegation, and reusable skills a
 |---------|----------------|--------------------------|
 | **Agent** (Orchestrator) | A central coordinator that breaks a task into parts and merges results | The `ChefAgent` receives a dish name, delegates work, and assembles the final recipe |
 | **Sub-Agent** | Specialized workers that run independently and return structured results | `IngredientFinder`, `StepWriter`, `NutritionEstimator` — each does one job |
-| **Parallelism** | Sub-agents can run concurrently when their tasks are independent | All 3 sub-agents execute at the same time, then results are collected |
+| **Web Research Agent** | An agent that uses tools to gather real-world data | `RecipeResearcher` searches online for top recipes and returns consensus findings |
+| **Parallelism** | Sub-agents can run concurrently when their tasks are independent | All 4 sub-agents execute at the same time, then results are collected |
+| **Review Agent** | A sequential quality gate that cross-references multiple data sources | `TopChef` merges generated recipe with web research to produce the best version |
 | **Skill** | A reusable, composable transformation applied to data | `FormatRecipeCard` takes raw results and produces a formatted recipe card |
 
 ---
@@ -30,25 +32,29 @@ User input:  "Spaghetti Carbonara"
                     │
                     ▼
            ┌───────────────┐
-           │   ChefAgent   │  ← Orchestrator
+           │   ChefAgent   │  ← Orchestrator (custom slash command)
            │  (main agent) │
            └───────┬───────┘
                    │
-        ┌──────────┼──────────┐
-        ▼          ▼          ▼
-  ┌───────────┐ ┌─────────┐ ┌──────────────┐
-  │ Ingredient│ │  Step   │ │  Nutrition   │  ← Sub-agents
-  │  Finder   │ │ Writer  │ │  Estimator   │     (parallel)
-  └─────┬─────┘ └────┬────┘ └──────┬───────┘
-        │            │             │
-        └──────────┬─┘─────────────┘
-                   ▼
-         ┌─────────────────┐
-         │ FormatRecipeCard │  ← Skill
-         └────────┬────────┘
-                  ▼
-          Formatted Recipe
-          shown to user
+     ┌─────────┼──────────┬──────────┐
+     ▼         ▼          ▼          ▼
+┌──────────┐ ┌────────┐ ┌─────────┐ ┌──────────┐
+│Ingredient│ │  Step  │ │Nutrition│ │  Recipe  │  ← Sub-agents
+│  Finder  │ │ Writer │ │Estimator│ │Researcher│    (spawned in parallel)
+└────┬─────┘ └───┬────┘ └────┬────┘ └────┬─────┘
+     │           │           │            │
+     └───────────┼───────────┘            │
+                 ▼                        │
+       ┌─────────────────┐               │
+       │ FormatRecipeCard │  ← Skill     │
+       └────────┬────────┘               │
+                ▼                         │
+       ┌─────────────────┐               │
+       │    TopChef      │◄──────────────┘  ← Cross-references research
+       └────────┬────────┘
+                ▼
+        Improved Recipe
+        saved to output/
 ```
 
 ---
@@ -57,18 +63,21 @@ User input:  "Spaghetti Carbonara"
 
 ### 5.1 ChefAgent (Orchestrator)
 
+- **Implementation:** Custom slash command in `.claude/commands/`
 - **Input:** A dish name (string)
 - **Responsibilities:**
   1. Parse the user request
-  2. Spawn 3 sub-agents in parallel
+  2. Spawn 4 sub-agents in parallel (using Claude Code's Agent tool): IngredientFinder, StepWriter, NutritionEstimator, RecipeResearcher
   3. Collect their results
-  4. Pass combined results to the `FormatRecipeCard` skill
-  5. Return the formatted recipe to the user
+  4. Apply the `FormatRecipeCard` skill to merge and format
+  5. Send formatted recipe + research findings to `TopChef` review agent for cross-referencing and improvement
+  6. Save the final recipe and execution log to `output/` as Markdown files
+  7. Return the improved recipe to the user
 - **Output:** Formatted recipe card (string)
 
 ### 5.2 Sub-Agents
 
-Each sub-agent receives the dish name and returns structured data.
+Each sub-agent is a prompt-driven agent spawned by the orchestrator. They receive the dish name and return structured data.
 
 #### IngredientFinder
 - **Input:** Dish name
@@ -119,11 +128,36 @@ Each sub-agent receives the dish name and returns structured data.
   }
   ```
 
-### 5.3 FormatRecipeCard (Skill)
+### 5.3 RecipeResearcher (Web Research Agent)
+
+- **Input:** Dish name
+- **Output:** Structured JSON with sources, consensus ingredients, consensus techniques, pro tips, and controversies
+- **Tools used:** WebSearch, WebFetch
+- **Example output:**
+  ```json
+  {
+    "sources": [
+      {"name": "Serious Eats", "url": "https://...", "key_insight": "Use guanciale, never bacon"}
+    ],
+    "consensus_ingredients": ["guanciale", "egg yolks", "pecorino romano"],
+    "consensus_techniques": ["Start guanciale in a cold pan", "Add egg mixture off heat"],
+    "pro_tips": ["Reserve pasta water", "Warm your bowls"],
+    "controversies": ["Whole eggs vs yolks only", "Pecorino only vs Pecorino-Parmesan blend"]
+  }
+  ```
+- **Why a separate agent?** It demonstrates how agents can use external tools (web search) to ground their output in real-world data rather than relying solely on training knowledge.
+
+### 5.4 TopChef (Review Agent)
+
+- **Input:** Formatted recipe card (Markdown) + RecipeResearcher findings (JSON)
+- **Output:** Improved recipe card that cross-references generated content with real-world research, adds a "Chef's Tips" and "Sources" section
+- **Why a separate agent?** It demonstrates a sequential review pattern that merges multiple data sources — the generated recipe and web research — into a single refined output. This teaches the real-world pattern of quality gates in agent pipelines.
+
+### 5.5 FormatRecipeCard (Skill)
 
 - **Input:** Combined results from all 3 sub-agents + dish name
 - **Output:** A human-readable, formatted recipe card (Markdown string)
-- **Why a skill and not a sub-agent?** It's a pure transformation — no LLM reasoning needed, just templating. This distinction is the teaching moment: skills are deterministic and reusable; sub-agents reason.
+- **Why a skill and not a sub-agent?** It's a pure transformation — no reasoning needed, just templating. This distinction is the teaching moment: skills are deterministic and reusable; sub-agents reason.
 
 ---
 
@@ -131,75 +165,67 @@ Each sub-agent receives the dish name and returns structured data.
 
 | Layer | Choice | Why |
 |-------|--------|-----|
-| Language | **Python 3.11+** | Most accessible for the tutorial audience |
-| LLM | **Claude API** (via `anthropic` SDK) | Powers the sub-agents' reasoning |
-| Framework | **None** — plain Python | No magic, no framework to learn. Every line is visible and explainable |
-| Concurrency | **`asyncio.gather`** | Simplest way to show parallel sub-agent execution |
-| Output | **Terminal / stdout** | No web UI needed — keeps focus on the patterns |
+| Platform | **Claude Code** (CLI / IDE) | The orchestration engine — agents, sub-agents, and skills are all Claude Code constructs |
+| Configuration | **`.claude/` directory** | Custom slash commands, prompts, and project settings live here |
+| Orchestration | **Claude Code Agent tool** | Spawns sub-agents natively — no custom code needed |
+| Language | **None (prompt-only)** | No Python, no framework. The entire system is prompt-driven. Code only if strictly needed |
+| Output | **Terminal / Claude Code UI** | Results displayed directly in the conversation |
 
 ---
 
 ## 7. File Structure
 
 ```
-simpleAgentics/
-├── PRD.md                  ← this file
-├── pitch.md                ← original project pitch
-├── main.py                 ← entry point: takes user input, runs ChefAgent
-├── agents/
-│   ├── __init__.py
-│   ├── chef_agent.py       ← orchestrator
-│   ├── ingredient_finder.py
-│   ├── step_writer.py
-│   └── nutrition_estimator.py
-├── skills/
-│   ├── __init__.py
-│   └── format_recipe_card.py
-├── models/
-│   ├── __init__.py
-│   └── recipe.py           ← data classes for structured results
-├── requirements.txt
-└── .env.example            ← template for ANTHROPIC_API_KEY
+AgentKitchen/
+├── PRD.md                          ← this file
+├── pitch.md                        ← original project pitch
+├── README.md                       ← project overview
+├── CLAUDE.md                       ← project instructions for Claude Code
+└── .claude/
+    └── commands/
+        ├── agent-chef.md                 ← orchestrator command: /agent-chef "dish name"
+        ├── subagent-find-ingredients.md  ← sub-agent prompt
+        ├── subagent-write-steps.md       ← sub-agent prompt
+        ├── subagent-estimate-nutrition.md ← sub-agent prompt
+        ├── subagent-recipe-researcher.md  ← web research agent prompt
+        ├── subagent-top-chef.md          ← review agent prompt
+        └── skill-format-recipe.md        ← skill prompt (formatting only)
 ```
 
 ---
 
 ## 8. Key Design Decisions
 
-### 8.1 No framework on purpose
-Frameworks hide the orchestration logic. Since the goal is to *teach* orchestration, every dispatch, await, and merge is explicit in the code.
+### 8.1 No code on purpose
+The entire system runs inside Claude Code using prompts and commands. This keeps the focus on agent patterns without any programming language getting in the way. Code is only added if strictly necessary.
 
-### 8.2 Skill is pure Python, not an LLM call
-The `FormatRecipeCard` skill is intentionally a plain function (no API call). This makes the distinction crystal clear:
-- **Sub-agent** = uses LLM to reason
-- **Skill** = deterministic code that transforms data
+### 8.2 Skill is a formatting prompt, not a reasoning task
+The `FormatRecipeCard` skill takes structured data and produces a Markdown card. It demonstrates that skills are deterministic transforms, distinct from sub-agents that reason.
 
 ### 8.3 Structured output from sub-agents
-Each sub-agent returns JSON-parseable structured data (via Pydantic models). This teaches a critical real-world pattern: agents communicate through contracts, not free-form text.
+Each sub-agent returns JSON-structured data. This teaches a critical real-world pattern: agents communicate through contracts, not free-form text.
 
-### 8.4 Parallel execution is visible
-The code explicitly uses `asyncio.gather()` so the learner can see the fan-out and fan-in in a single line.
+### 8.4 Custom slash commands as the interface
+The user types `/agent-chef "Spaghetti Carbonara"` and the orchestrator handles everything. This makes the entry point intuitive and demonstrates how Claude Code commands work.
 
 ---
 
 ## 9. Success Criteria
 
-1. A viewer can run `python main.py "Spaghetti Carbonara"` and see a formatted recipe card
-2. The code is readable top-to-bottom in under 10 minutes
-3. Each file is under 50 lines of code
-4. The three patterns (agent, sub-agent, skill) are clearly labeled in code comments
-5. A viewer can swap in a different dish name and get a different recipe — no hardcoding
+1. A user can run `/agent-chef "Spaghetti Carbonara"` in Claude Code and see a formatted recipe card
+2. The command files are readable in under 5 minutes
+3. The three patterns (agent, sub-agent, skill) are clearly visible in the command structure
+4. A user can swap in a different dish name and get a different recipe — no hardcoding
 
 ---
 
 ## 10. Out of Scope
 
-- Web UI or API server
+- Python application or web server
 - Database or caching
 - Error retries or fallback logic
-- Multiple skill chaining
+- External API integrations
 - User authentication
-- Streaming responses
 
 These can be added as "next steps" in the video but are not part of v1.
 
@@ -210,4 +236,4 @@ These can be added as "next steps" in the video but are not part of v1.
 - Add a `DietaryFilter` skill that removes ingredients based on allergies
 - Add a `CostEstimator` sub-agent
 - Chain multiple skills: format → translate → export-to-PDF
-- Replace Claude with a local model to show provider-agnostic design
+- Wrap the system in a Python CLI using the Anthropic Agent SDK

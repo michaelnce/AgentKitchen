@@ -1,0 +1,2 @@
+- [Project goal](project_goal.md) — Educational demo of agent/sub-agent/skill patterns using Recipe Chef Bot
+- [User profile](user_michael.md) — Michael, building educational coding video content
